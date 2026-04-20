@@ -1,0 +1,9 @@
+.pio/
+.vscode/
+!.vscode/extensions.json
+
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
