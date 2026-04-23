@@ -70,9 +70,22 @@ static const bool MODO_DEBUG_SERIAL = false;
 // static const bool MODO_DEBUG_SERIAL = true;
 
 static const bool OLED_ATIVO_MODO_CAMPO = true;
-static const uint64_t TEMPO_SLEEP_US = 60ULL * 1000000ULL; // 1 minuto
+static const uint64_t TEMPO_SLEEP_US = 15ULL * 60ULL * 1000000ULL; // 15 minutos
 static const unsigned long TEMPO_ESTABILIZACAO_MS = 60000;
 static const unsigned long INTERVALO_RELATORIO_MS = 2000;
+
+// ===============================
+// CONTROLE DE FALHAS (PERSISTENTE)
+// ===============================
+
+RTC_DATA_ATTR int bootFailCount = 0;
+
+static const int MAX_BOOT_FAILS = 5;
+static const unsigned long BOOT_TIMEOUT_MS = 20000;
+static unsigned long bootStartMs = 0;
+
+static const unsigned long LOOP_TIMEOUT_MS = 30000;
+static unsigned long loopStartMs = 0;
 
 // =====================================================
 // ESTADOS DO SISTEMA
@@ -139,6 +152,9 @@ static size_t buildPacket(uint8_t seqLocal, uint8_t* buf, PayloadColmeia& p);
 static bool validAck(uint8_t* buf, size_t len, uint8_t seqLocal);
 static void initRadio();
 static bool sendPacketReliable(PayloadColmeia& payload);
+
+static void verificarWatchdogBoot();
+static void verificarWatchdogLoop();
 
 // =====================================================
 // CRC16
@@ -518,18 +534,43 @@ void setup() {
   Serial.begin(115200);
   delay(1500);
 
+  bootStartMs = millis();
+  bootFailCount++;
+
   Serial.println();
   Serial.println("==================================");
   Serial.println("Iniciando Colmeia Inteligente...");
   Serial.println("==================================");
+  
+  if (bootFailCount > MAX_BOOT_FAILS) {
+    Serial.println("[BOOT] Muitas falhas consecutivas! Forcando reset completo...");
+    delay(2000);
+    ESP.restart();
+  }
 
-  printWakeupReason();
+   printWakeupReason();
 
-  initLoadCell();
-  initDHT();
+  Serial.println("[BOOT] Init display");
   initDisplay();
+  verificarWatchdogBoot();
+
+  Serial.println("[BOOT] Init loadcell");
+  initLoadCell();
+  verificarWatchdogBoot();
+
+  Serial.println("[BOOT] Init sensores");
+  initDHT();
+  verificarWatchdogBoot();
+
+  Serial.println("[BOOT] Init bateria");
   initBatteryMonitor();
+  verificarWatchdogBoot();
+
+  Serial.println("[BOOT] Init LoRa");
   initRadio();
+  verificarWatchdogBoot();
+
+  Serial.println("[BOOT] Sistema pronto");
 
   if (!MODO_DEBUG_SERIAL && !OLED_ATIVO_MODO_CAMPO) {
     turnOffDisplay();
@@ -551,6 +592,9 @@ void setup() {
   } else {
     iniciarCiclo();
   }
+  
+  bootFailCount = 0;
+  Serial.println("[BOOT] Inicializacao OK - contador resetado");
 }
 
 // =====================================================
@@ -558,8 +602,11 @@ void setup() {
 // =====================================================
 
 void loop() {
+  loopStartMs = millis();
+
   processSerialCommands();
   updateLoadCell();
+  verificarWatchdogLoop();
 
   if (estadoAtual != ESTADO_RUNNING) {
     return;
@@ -596,5 +643,24 @@ void loop() {
       Serial.println("Ciclo finalizado. Deep sleep desativado.");
       Serial.println("Digite 'start' para iniciar novo ciclo.");
     }
+  }
+}
+
+// ===============================
+// FUNÇÕES WATCHDOG
+// ===============================
+static void verificarWatchdogBoot() {
+  if (millis() - bootStartMs > BOOT_TIMEOUT_MS) {
+    Serial.println("[BOOT] Timeout de inicializacao! Reiniciando...");
+    delay(1000);
+    ESP.restart();
+  }
+}
+
+static void verificarWatchdogLoop() {
+  if (millis() - loopStartMs > LOOP_TIMEOUT_MS) {
+    Serial.println("[LOOP] Travamento detectado! Reiniciando...");
+    delay(1000);
+    ESP.restart();
   }
 }
